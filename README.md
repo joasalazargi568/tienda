@@ -2,7 +2,7 @@
 
 Aplicación **backend** desarrollada con **Spring Boot** para la gestión de una tienda: administración de **clientes** y **cotizaciones**, persistencia con **JPA**/**MySQL**, validaciones con **Bean Validation** y preparación para integración con **Salesforce**.
 
-> Este README es la **versión completa y extendida** (estilo profesional) con ejemplos, DTOs, snippets OpenAPI, guía de ejecución, pruebas, calidad de código, Docker y CI.
+> Este README es la **versión completa y extendida** (estilo profesional) con ejemplos, DTOs, snippets OpenAPI, guía de ejecución, pruebas, calidad de código, **Docker** y CI.
 
 ---
 
@@ -19,6 +19,8 @@ Aplicación **backend** desarrollada con **Spring Boot** para la gestión de una
 
 - [Tecnologías](#-tecnologías)
 - [Arquitectura del proyecto](#-arquitectura-del-proyecto)
+- [Arquitectura (alto nivel)](#-arquitectura-alto-nivel)
+- [Modelo Entidad–Relación (ERD)](#-modelo-entidad–relación-erd)
 - [Modelo de dominio](#-modelo-de-dominio)
 - [Reglas de negocio implementadas](#-reglas-de-negocio-implementadas)
 - [Persistencia / Base de datos](#-persistencia--base-de-datos)
@@ -33,14 +35,15 @@ Aplicación **backend** desarrollada con **Spring Boot** para la gestión de una
 - [Manejo de errores (estándar)](#-manejo-de-errores-estándar)
 - [Integración con Salesforce](#-integración-con-salesforce)
 - [Configuración de entorno](#-configuración-de-entorno)
-- [Cómo ejecutar](#️-cómo-ejecutar)
-- [Docker (opcional)](#-docker-opcional)
+- [Cómo ejecutar (local)](#️-cómo-ejecutar-local)
+- [🚢 Docker](#-docker)
+  - [Estructura recomendada](#estructura-recomendada)
+  - [Dockerfile](#dockerfile)
+  - [docker-compose.yml (educativo sin contraseña)](#docker-composeyml-educativo-sin-contraseña)
+  - [Inicialización automática con schema.sql](#inicialización-automática-con-schemasql)
+  - [Comandos útiles](#comandos-útiles)
+  - [Solución de problemas comunes](#solución-de-problemas-comunes)
 - [Pruebas](#-pruebas)
-- [Calidad de código](#-calidad-de-código)
-- [OpenAPI / Swagger (opcional)](#-openapi--swagger-opcional)
-- [CI con GitHub Actions (opcional)](#-ci-con-github-actions-opcional)
-- [Roadmap](#-roadmap)
-- [Contribuir](#-contribuir)
 - [Licencia](#-licencia)
 - [Autor](#-autor)
 
@@ -76,12 +79,13 @@ src/main/java/com/tienda
  ├── repository/             # Repositorios JPA
  └── service/                # Lógica de negocio y orquestación
 ```
+
 ## 🏗️ Arquitectura (alto nivel)
 ![Arquitectura – Tienda](docs/diagram_arquitectura_enterprise.png)
 
 ## 🗄️ Modelo Entidad–Relación (ERD)
 ![ERD – Tienda](docs/diagram_erd_enterprise.png)
-``
+
 ---
 
 ## 🧩 Modelo de dominio
@@ -430,7 +434,7 @@ spring.jpa.open-in-view=false
 
 ---
 
-## ▶️ Cómo ejecutar
+## ▶️ Cómo ejecutar (local)
 
 ```bash
 git clone https://github.com/joasalazargi568/tienda.git
@@ -447,12 +451,215 @@ Aplicación por defecto: `http://localhost:8080`
 
 ---
 
+## 🚢 Docker
+
+### Estructura recomendada
+
+```
+./
+├── docker/
+│   └── init/
+│       └── schema.sql        # Esquema SQL inicial (opcional)
+├── Dockerfile                # Imagen multi-stage de la app
+├── docker-compose.yml        # Orquestación app + MySQL
+└── README.md
+```
+
+### Dockerfile
+
+```Dockerfile
+# ==== Etapa 1: Build ====
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /app
+COPY pom.xml .
+RUN mvn -q -DskipTests dependency:go-offline
+COPY src ./src
+RUN mvn -q -DskipTests clean package
+
+# ==== Etapa 2: Runtime ====
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /app/target/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]
+```
+
+### docker-compose.yml (educativo sin contraseña)
+
+```yaml
+services:
+  db:
+    image: mysql:8
+    container_name: tienda_db
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: tienda
+    ports:
+      - "3307:3306"   # evita conflicto con MySQL local
+    volumes:
+      - ./docker/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      retries: 10
+      timeout: 5s
+
+  app:
+    build: .
+    container_name: tienda_app
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ""
+    depends_on:
+      db:
+        condition: service_healthy
+```
+
+> Si prefieres un entorno **seguro con contraseña**, define `MYSQL_ROOT_PASSWORD`, `MYSQL_USER` y `MYSQL_PASSWORD`, y ajusta las variables de la app en consecuencia.
+
+### Inicialización automática con schema.sql
+
+Coloca tu **`schema.sql`** en `docker/init/`.
+La imagen oficial de MySQL ejecutará cualquier `.sql` en `/docker-entrypoint-initdb.d/` **solo la primera vez** que la base se inicializa (si el volumen está vacío).
+
+**Reseteo necesario para ejecutar el schema por primera vez:**
+```bash
+docker compose down -v
+docker compose up -d --build
+```
+
+
+### Comandos útiles
+
+> Lista práctica para el día a día con Docker y Docker Compose.
+
+#### 📦 Imágenes
+```bash
+# Listar imágenes locales
+docker images
+
+# Construir imagen (si usas Dockerfile en la raíz)
+docker build -t tienda:dev .
+
+# Eliminar imagen (forzar si está en uso)
+docker rmi tienda:dev --force
+```
+
+#### 🧱 Contenedores
+```bash
+# Listar contenedores en ejecución
+docker ps
+
+# Listar TODOS los contenedores (incluye parados)
+docker ps -a
+
+# Detener / iniciar / eliminar contenedor
+docker stop tienda_app
+docker start tienda_app
+docker rm tienda_app
+
+# Ver procesos dentro del contenedor (tipo "top")
+docker top tienda_app
+
+# Consumo de recursos en vivo
+docker stats
+```
+
+#### 🔎 Logs y diagnóstico
+```bash
+# Ver logs en tiempo real (Compose)
+docker compose logs -f app
+
+# Ver últimos 100 logs del servicio de DB
+docker compose logs --tail=100 db
+
+# Inspeccionar metadatos de un contenedor (IP, mounts, etc.)
+docker inspect tienda_app | less
+```
+
+#### 🧭 Ejecutar comandos dentro del contenedor
+```bash
+# Abrir una shell dentro de la app (si tiene /bin/sh)
+docker exec -it tienda_app sh
+
+# Ejecutar cliente mysql dentro del contenedor de DB
+# (ajusta usuario/clave según tu configuración)
+docker exec -it tienda_db mysql -uroot -e "SHOW DATABASES;"
+```
+
+#### 🗂️ Copiar archivos entre host y contenedor
+```bash
+# Copiar del host → contenedor
+docker cp ./local.txt tienda_app:/app/local.txt
+
+# Copiar del contenedor → host
+docker cp tienda_app:/app/app.jar ./app.jar
+```
+
+#### 🧹 Limpieza (con cuidado)
+```bash
+# Eliminar contenedores parados, redes no usadas, imágenes dangling y cache de build
+docker system prune -f
+
+# Eliminar TODAS las imágenes no usadas (agresivo)
+docker image prune -a -f
+
+# Eliminar volúmenes no referenciados (¡borra datos!)
+docker volume prune -f
+```
+
+#### 🌐 Redes y volúmenes
+```bash
+# Listar redes y volúmenes
+docker network ls
+docker volume ls
+
+# Inspeccionar redes/volúmenes
+docker network inspect <network>
+docker volume inspect <volume>
+```
+
+#### 🧩 Docker Compose (lo más usado en este proyecto)
+```bash
+# Levantar (con build si cambiaste el Dockerfile)
+docker compose up -d --build
+
+# Ver estado general
+docker compose ps
+
+# Reiniciar solo la app
+docker compose restart app
+
+# Apagar todo
+docker compose down
+
+# Apagar y BORRAR volúmenes (reinicia DB)
+docker compose down -v
+
+# Reconstruir solo la app tras cambios
+docker compose build app
+```
+
+### Solución de problemas comunes
+
+- **Warning `version:` obsoleta en docker-compose** → quita la línea `version:`.
+- **`ports are not available: 3306`** → cambia a `"3307:3306"` o detén MySQL local.
+- **`Database is uninitialized and password option is not specified`** → usa `MYSQL_ALLOW_EMPTY_PASSWORD: "yes"` (educativo) o define `MYSQL_ROOT_PASSWORD`.
+- **La app no conecta a MySQL** → revisa env de la app (`SPRING_DATASOURCE_*`) y que el host sea `db` y puerto `3306` interno.
+
+---
+
 ## 🧪 Pruebas
 
-- Ejecutar pruebas:
 ```bash
 ./mvnw test
 ```
+
+---
+
 ## 📄 Licencia
 
 Este proyecto se distribuye bajo licencia **MIT**. Puedes usarlo libremente con atribución.

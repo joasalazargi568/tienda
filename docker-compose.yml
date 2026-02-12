@@ -1,0 +1,30 @@
+services:
+  db:
+    image: mysql:8
+    container_name: tienda_db
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"   # <- aquí, en db
+      MYSQL_DATABASE: tienda
+    ports:
+      - "3307:3306"                       # evitar conflicto con 3306 local
+    volumes:
+      - ./docker/init:/docker-entrypoint-initdb.d
+    # command: ["--default-authentication-plugin=mysql_native_password"] # opcional, prueba sin esto primero
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      retries: 10
+      timeout: 5s
+
+  app:
+    build: .
+    container_name: tienda_app
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+      SPRING_DATASOURCE_USERNAME: root     # root sin contraseña
+      SPRING_DATASOURCE_PASSWORD: ""       # cadena vacía
+    depends_on:
+      db:
+        condition: service_healthy
