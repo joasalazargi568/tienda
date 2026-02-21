@@ -44,6 +44,13 @@ Aplicación **backend** desarrollada con **Spring Boot** para la gestión de una
   - [Comandos útiles](#comandos-útiles)
   - [Solución de problemas comunes](#solución-de-problemas-comunes)
 - [Pruebas](#-pruebas)
+  - [Tipos de pruebas](#tipos-de-pruebas)
+  - [Dependencias de test (POM)](#dependencias-de-test-pom)
+  - [Manejador global de errores](#manejador-global-de-errores)
+  - [Ejemplos de tests](#ejemplos-de-tests)
+  - [Ejecutar pruebas](#ejecutar-pruebas)
+  - [Cobertura con JaCoCo](#cobertura-con-jacoco)
+  - [Roadmap: Testcontainers (MySQL)](#roadmap-testcontainers-mysql)
 - [Licencia](#-licencia)
 - [Autor](#-autor)
 
@@ -80,10 +87,14 @@ src/main/java/com/tienda
  └── service/                # Lógica de negocio y orquestación
 ```
 
+---
+
 ## 🏗️ Arquitectura (alto nivel)
+
 ![Arquitectura – Tienda](docs/diagram_arquitectura_enterprise.png)
 
 ## 🗄️ Modelo Entidad–Relación (ERD)
+
 ![ERD – Tienda](docs/diagram_erd_enterprise.png)
 
 ---
@@ -131,8 +142,8 @@ Representa una cotización asociada a un cliente.
 - Un cliente debe tener nombres, apellidos y email válidos.
 - El email del cliente es único.
 - Una cotización debe estar asociada a un cliente.
-- El total de la cotización debe ser mayor a 0.
-- El estado inicial de la cotización es `CREADA`.
+- El **total** de la cotización debe ser **mayor a 0**.
+- El **estado inicial** de la cotización es `CREADA`.
 - Los campos `createdAt` se asignan automáticamente al persistir.
 
 ---
@@ -234,8 +245,7 @@ Crea una nueva cotización asociada a un cliente existente.
 ```json
 {
   "clienteId": 1,
-  "total": 259900.0,
-  "comentarios": "Cotización inicial para cliente"
+  "total": 259900.0
 }
 ```
 
@@ -345,8 +355,7 @@ curl "http://localhost:8080/api/clientes/1/cotizaciones?page=0&size=200"
 ```json
 {
   "clienteId": 1,
-  "total": 259900.0,
-  "comentarios": "Cotización inicial para cliente"
+  "total": 259900.0
 }
 ```
 
@@ -401,7 +410,7 @@ Si utilizas `@ControllerAdvice` para errores, documenta el formato de salida:
 }
 ```
 
-> Sugerencia: centralizar validaciones y mapear excepciones de dominio (p. ej., `ClienteNoExisteException → 404`).
+> Sugerencia: centralizar validaciones y mapear excepciones de dominio (p. ej., `ResourceNotFoundException → 404`).
 
 ---
 
@@ -531,7 +540,6 @@ docker compose down -v
 docker compose up -d --build
 ```
 
-
 ### Comandos útiles
 
 > Lista práctica para el día a día con Docker y Docker Compose.
@@ -654,9 +662,219 @@ docker compose build app
 
 ## 🧪 Pruebas
 
+Este proyecto incluye **pruebas unitarias** de la capa de **servicios** y **pruebas slice de la capa web (MVC)** usando `@WebMvcTest` en **Spring Boot 4**.
+
+### Tipos de pruebas
+
+- **Unitarias (Service)**
+  - `ClienteServiceTest`:
+    - Normalización de email y validación de duplicados (lanza `IllegalArgumentException`).
+    - Manejo de `DataIntegrityViolationException` (race condition) → `IllegalArgumentException`.
+    - Obtención por id (ok / not found).
+  - `CotizacionServiceTest`:
+    - **Estado inicial `CREADA`** al crear.
+    - Validación de `total` (si se maneja en service) o en el controller con Bean Validation.
+    - Listado paginado por cliente (mapeo, orden y tamaño).
+
+- **Slice Web (Controller)**
+  - `ClienteControllerTest` (`@WebMvcTest(ClienteController.class)`):
+    - `POST /api/clientes` → **201** y respuesta `ClienteResponse`.
+    - `GET /api/clientes/{id}` → **404** con cuerpo cuando no existe (`GlobalExceptionHandler`).
+    - `GET /api/clientes/{id}/cotizaciones` → **200** y **límite `size <= 50`**.
+  - `CotizacionControllerTest` (`@WebMvcTest(CotizacionController.class)`):
+    - `POST /api/cotizaciones` → **201** válido.
+    - `POST /api/cotizaciones` → **400** cuando `total <= 0`.
+    - **404** cuando `clienteId` no existe.
+
+> **Notas (Spring Boot 4)**
+> - `@WebMvcTest` → paquete: `org.springframework.boot.webmvc.test.autoconfigure`.
+> - `@MockBean` fue retirado; usar `@MockitoBean`: `org.springframework.test.context.bean.override.mockito.MockitoBean`.
+> - Agregar **`spring-boot-starter-webmvc-test`** (scope `test`) para el *slice* MVC.
+> - Para JSON en tests, inyecta **`tools.jackson.databind.json.JsonMapper`** (Jackson 3) o `ObjectMapper` (añadiendo `jackson-databind` en test).
+
+### Dependencias de test (POM)
+
+```xml
+<!-- Tests generales -->
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-test</artifactId>
+  <scope>test</scope>
+</dependency>
+
+<!-- NUEVO: slice MVC en Spring Boot 4 -->
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-webmvc-test</artifactId>
+  <scope>test</scope>
+</dependency>
+
+<!-- Si prefieres usar ObjectMapper clásico en tests -->
+<dependency>
+  <groupId>com.fasterxml.jackson.core</groupId>
+  <artifactId>jackson-databind</artifactId>
+  <scope>test</scope>
+</dependency>
+```
+
+### Manejador global de errores
+
+Para respuestas 400/404 consistentes, el proyecto incluye un `@RestControllerAdvice`:
+
+```java
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    @ExceptionHandler(ResourceNotFoundException.class)
+    public ResponseEntity<Map<String, Object>> handleNotFound(ResourceNotFoundException ex,
+                                                              HttpServletRequest req) { /* ... */ }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleBadRequest(IllegalArgumentException ex,
+                                                                HttpServletRequest req) { /* ... */ }
+}
+```
+
+En tests con `@WebMvcTest`, impórtalo si es necesario:
+
+```java
+@WebMvcTest(controllers = ClienteController.class)
+@Import(GlobalExceptionHandler.class)
+class ClienteControllerTest { /* ... */ }
+```
+
+### Ejemplos de tests
+
+**Service – `ClienteServiceTest` (extracto)**
+```java
+@ExtendWith(MockitoExtension.class)
+class ClienteServiceTest {
+  @Mock private ClienteRepository clienteRepository;
+  @InjectMocks private ClienteService clienteService;
+
+  @Test
+  void crearCliente_deberiaFallarCuandoEmailDuplicado() {
+    when(clienteRepository.findByEmail("juan.perez@example.com"))
+      .thenReturn(Optional.of(Cliente.builder().id(99L).email("juan.perez@example.com").build()));
+    var req = ClienteCreateRequest.builder()
+            .nombres("Juan").apellidos("Pérez").email("juan.perez@example.com").build();
+
+    assertThatThrownBy(() -> clienteService.crearCliente(req))
+      .isInstanceOf(IllegalArgumentException.class)
+      .hasMessageContaining("Ya existe un cliente");
+  }
+}
+```
+
+**Web – `ClienteControllerTest` (extracto)**
+```java
+@WebMvcTest(controllers = ClienteController.class)
+@Import(GlobalExceptionHandler.class)
+class ClienteControllerTest {
+
+  @Autowired private MockMvc mvc;
+  @Autowired private tools.jackson.databind.json.JsonMapper mapper;
+
+  @MockitoBean private ClienteService clienteService;
+  @MockitoBean private CotizacionService cotizacionService;
+
+  @Test
+  void crearCliente_deberiaRetornar201() throws Exception {
+    var req = new ClienteCreateRequest("Juan", "Pérez", "juan.perez@example.com", "3001234567", "123");
+    var res = ClienteResponse.builder()
+      .id(1L).nombres("Juan").apellidos("Pérez").email("juan.perez@example.com")
+      .telefono("3001234567").documento("123")
+      .createdAt(LocalDateTime.parse("2026-02-12T15:30:20"))
+      .build();
+
+    when(clienteService.crearCliente(any())).thenReturn(res);
+
+    mvc.perform(post("/api/clientes")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(mapper.writeValueAsString(req)))
+       .andExpect(status().isCreated())
+       .andExpect(jsonPath("$.id").value(1));
+  }
+}
+```
+
+**Web – Límite de paginación `size <= 50` (extracto)**
+```java
+@Test
+void listarPorClientePaginado_deberiaLimitarSizeA50() throws Exception {
+  when(cotizacionService.listarPorClientePaginado(eq(1L), any()))
+    .thenAnswer(inv -> {
+      Pageable pr = inv.getArgument(1);
+      assertThat(pr.getPageSize()).isEqualTo(50);
+      return PageResponse.<CotizacionResponse>builder()
+        .content(List.of())
+        .page(pr.getPageNumber())
+        .size(pr.getPageSize())
+        .totalElements(0)
+        .totalPages(0)
+        .last(true)
+        .build();
+    });
+
+  mvc.perform(get("/api/clientes/1/cotizaciones?page=0&size=200"))
+     .andExpect(status().isOk())
+     .andExpect(jsonPath("$.size", is(50)));
+}
+```
+
+### Ejecutar pruebas
+
 ```bash
 ./mvnw test
 ```
+
+Ejecutar una clase específica:
+
+```bash
+./mvnw -Dtest=ClienteControllerTest test
+./mvnw -Dtest=CotizacionServiceTest test
+```
+
+### Cobertura con JaCoCo
+
+Agrega el plugin al `pom.xml`:
+
+```xml
+<build>
+  <plugins>
+    <plugin>
+      <groupId>org.jacoco</groupId>
+      <artifactId>jacoco-maven-plugin</artifactId>
+      <version>0.8.12</version>
+      <executions>
+        <execution>
+          <goals><goal>prepare-agent</goal></goals>
+        </execution>
+        <execution>
+          <id>report</id>
+          <phase>test</phase>
+          <goals><goal>report</goal></goals>
+        </execution>
+      </executions>
+    </plugin>
+  </plugins>
+</build>
+```
+
+Generar y visualizar:
+
+```bash
+./mvnw clean test
+# Abre: target/site/jacoco/index.html
+```
+
+### Roadmap: Testcontainers (MySQL)
+
+**Objetivo:** validar comportamiento real de base de datos (unicidad `email`, FK `cotizacion.cliente_id`, consultas e índices).
+
+**Plan:**
+- Añadir `org.testcontainers:mysql` (scope `test`).
+- Crear tests `@DataJpaTest`/`@SpringBootTest` que levanten un contenedor MySQL efímero.
+- Mantener unit tests rápidos; usar integración para reglas del esquema.
 
 ---
 
